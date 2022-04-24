@@ -12,7 +12,7 @@ import rospy
 
 
 if __name__ == "__main__":
-    fa = FrankaArm()
+    fa = FrankaArm(with_gripper=False)
     fa.reset_joints()
 
     rospy.loginfo('Generating Trajectory')
@@ -22,10 +22,19 @@ if __name__ == "__main__":
     fa.goto_pose(p)
     joints_1 = fa.get_joints()
 
-    T = 5
+    T = 1
     dt = 0.02
     ts = np.arange(0, T, dt)
+
     joints_traj = [min_jerk(joints_1, joints_0, t, T) for t in ts]
+
+    import time
+    s = time.time()
+    joints_traj = [min_jerk(joints_1, joints_0, t, T) for t in ts]
+    print(time.time() -s)
+
+
+
 
     rospy.loginfo('Initializing Sensor Publisher')
     pub = rospy.Publisher(FC.DEFAULT_SENSOR_PUBLISHER_TOPIC, SensorDataGroup, queue_size=1000)
