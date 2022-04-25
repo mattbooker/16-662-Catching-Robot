@@ -46,7 +46,7 @@ target_link_libraries(detect_node
  #   ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(detect_estimation 
+target_link_libraries(detect_estimation
     ${catkin_LIBRARIES} 
  #   ${OpenCV_INCLUDE_DIRS}
 )

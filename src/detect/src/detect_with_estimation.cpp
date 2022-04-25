@@ -9,8 +9,16 @@
 #include <message_filters/sync_policies/approximate_time.h>
 
 #include "geometry_msgs/PointStamped.h"
+#include <visualization_msgs/Marker.h>
 #include <utility>
+#include <Eigen/Dense>
+#include <iostream>
+#include <cmath>
+#include <vector>
+#include <Eigen/QR>
 
+
+#include <vector>
 #include <cmath>
 #include <iostream>
 
@@ -20,77 +28,147 @@
 image_transport::Publisher marked_pub;
 image_transport::Publisher ball_pub;
 image_transport::Publisher trans_pub;
+image_transport::Publisher water_pub;
 ros::Publisher pose_pub;
 ros::Publisher catch_point_pub;
+ros::Publisher vis;
+
+float prev_depth;
+
+const float NUMBER_OF_SAMPLES = 10;
+const float START_DEPTH = 2.3;
+const float HEIGHT_OFFSET = 0.3;
+
+std::vector<double> samples_x(NUMBER_OF_SAMPLES);
+std::vector<double> samples_y(NUMBER_OF_SAMPLES);
+std::vector<double> samples_z(NUMBER_OF_SAMPLES);
+std::vector<double> samples_t(NUMBER_OF_SAMPLES);
+ros::Time prev_time;
+int sample_count = 0;
 
 cv::Mat K;
 cv::Mat extrinsics;
 int frame_idx = 0;
 std::pair<float, float> invalid_estimate = std::make_pair(std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
 
+void polyfit(const std::vector<double> &t,
+		const std::vector<double> &v,
+		std::vector<double> &coeff,
+		int order)
+{
+	// Create Matrix Placeholder of size n x k, n= number of datapoints, k = order of polynomial, for exame k = 3 for cubic polynomial
+	Eigen::MatrixXd T(t.size(), order + 1);
+	Eigen::VectorXd V = Eigen::VectorXd::Map(&v.front(), v.size());
+	Eigen::VectorXd result;
+
+	// check to make sure inputs are correct
+	assert(t.size() == v.size());
+	assert(t.size() >= order + 1);
+	// Populate the matrix
+	for(size_t i = 0 ; i < t.size(); ++i)
+	{
+		for(size_t j = 0; j < order + 1; ++j)
+		{
+			T(i, j) = pow(t.at(i), j);
+		}
+	}
+	// std::cout<<T<<std::endl;
+	
+	// Solve for linear least square fit
+	result  = T.householderQr().solve(V);
+	coeff.resize(order+1);
+	for (int k = 0; k < order+1; k++)
+	{
+		coeff[k] = result[k];
+	}
+}
+
+
 std::pair<float, float> ball_estimation(geometry_msgs::PointStamped point_msg)
 {
-  float dt = 1/30;
-  float traj_time, root, root1, root2;
-  float g = 9.81;
-  float z_desired = 0.2;
-  float curr_x_pos = point_msg.point.x;
-  float curr_y_pos = point_msg.point.y;
-  float curr_z_pos = point_msg.point.z;
-  float prev_x_pos, prev_y_pos, prev_z_pos;
-  float x_vel, y_vel, z_vel, x_vel_mean, y_vel_mean, z_vel_mean;
+  ros::Duration diff = ros::Time::now() - prev_time;
+  float dt = float(diff.nsec) / 1e9;
 
-  if (point_msg.point.x > 2) {
-    return std::make_pair(std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
+  float dist = pow(pow(point_msg.point.x,2) + pow(point_msg.point.y,2) + pow(point_msg.point.z,2), 0.5);
+
+  ROS_ERROR("dist = %f",dist);
+
+
+  if (dist < 0.2 || dist > START_DEPTH) {
+    return invalid_estimate;
   }
 
-  if (frame_idx == 0)
-  {
-    prev_x_pos = curr_x_pos;
-    prev_y_pos = curr_y_pos;
-    prev_z_pos = curr_z_pos;
-    frame_idx++;
-    return std::make_pair(std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
+  if (sample_count < NUMBER_OF_SAMPLES) {
+    samples_x.push_back(point_msg.point.x);
+    samples_y.push_back(point_msg.point.y);
+    samples_z.push_back(point_msg.point.z);
+
+    // visualization_msgs::Marker points;
+    // points.header.frame_id = "panda_link0";
+    // points.header.stamp = ros::Time::now();
+    // points.ns = "points";
+    // points.action = visualization_msgs::Marker::ADD;
+    // points.pose.orientation.w = 1.0;
+    // points.id = sample_count;
+    // points.type = visualization_msgs::Marker::POINTS;
+    // points.scale.x = 0.05;
+    // points.scale.y = 0.05;
+    // points.color.g = 1.0f;
+    // points.color.a = 1.0;
+
+    // geometry_msgs::Point p;
+    // p.x = point_msg.point.x;
+    // p.y = point_msg.point.y;
+    // p.z = point_msg.point.z;
+    // points.points.push_back(p);
+    // vis.publish(points);
+
+    double t = float(ros::Time::now().nsec) / 1e9;
+    samples_t.push_back(t);
+
+    sample_count++;
+    return invalid_estimate;
+  }
+  else {
+    std::vector<double> x_coeff;
+    std::vector<double> y_coeff;
+    std::vector<double> z_coeff;
+    polyfit(samples_t, samples_x, x_coeff, 1);
+    polyfit(samples_t, samples_y, y_coeff, 1);
+    polyfit(samples_t, samples_z, z_coeff, 2);
+
+    float a = z_coeff[2];
+    float b = z_coeff[1];
+    float c = z_coeff[0] - HEIGHT_OFFSET;
+
+    float discriminant = b*b - 4*a*c;
+    float root, root1, root2;
+
+    if (discriminant > 0)
+    {
+      root1 = (-b + sqrt(discriminant)) / (2*a);
+      root2 = (-b - sqrt(discriminant)) / (2*a);
+      root = std::min(root1, root2);
+    }
+    else if (discriminant==0)
+    {
+      root = -b/(2*a);
+    }
+    else
+    {
+      ROS_ERROR("Roots are imaginary");
+      return invalid_estimate;
+    }
+
+    ROS_WARN("Root = %f, %f, %f, %f", root, root1, root2, discriminant);
+    ROS_WARN("x_coeffs = %f, %f", x_coeff[0], x_coeff[1]);
+    float x_final = x_coeff[0] + root * x_coeff[1];
+    float y_final = y_coeff[0] + std::max(root1, root2) * y_coeff[1];
+
+    return std::make_pair(x_final, y_final);    
   }
 
-  if (frame_idx>=1 && frame_idx <= 10)
-  {
-    x_vel = (curr_x_pos - prev_x_pos)/dt;
-    y_vel = (curr_y_pos - prev_y_pos)/dt;
-    z_vel = (curr_z_pos - prev_z_pos)/dt;
-    x_vel_mean += x_vel/10;
-    y_vel_mean += y_vel/10; 
-    z_vel_mean += z_vel/10; 
-    frame_idx++;
-    return std::make_pair(std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
-  }
-
-  float a = -g;
-  float b = 2*z_vel;
-  float c = -0.4;
-
-  float discriminant = b*b - 4*a*c;
-
-  if (discriminant > 0)
-  {
-    root1 = (-b + sqrt(discriminant)) / (2*a);
-    root2 = (-b - sqrt(discriminant)) / (2*a);
-    root = std::max(root1, root2);
-  }
-  else if (discriminant==0)
-  {
-    root = -b/(2*a);
-  }
-  else
-  {
-    ROS_ERROR("Roots are imaginary");
-    return std::make_pair(std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
-  }
-
-  float x_final = curr_x_pos + x_vel_mean*root;
-  float y_final = curr_y_pos + y_vel_mean*root;
-
-  return std::make_pair(x_final, y_final);
+  prev_time = ros::Time::now();
 }
 
 // RGB Image
@@ -141,41 +219,134 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
                           cv::Size(2*kernel_size + 1, 2*kernel_size + 1),
                           cv::Point(kernel_size, kernel_size));
   cv::Mat element_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE,
-                          cv::Size(2*kernel_size + 1, 2*kernel_size + 1),
+                          cv::Size(2*kernel_size + 3, 2*kernel_size + 3),
                           cv::Point(kernel_size, kernel_size));
   cv::erode(threshFrame, threshFrame, element_erode);
   cv::dilate(threshFrame, threshFrame, element_dilate);
 
-  // Calculate pixel centroid
-  cv::Moments m = cv::moments(threshFrame, false);
-  cv::Point com(m.m10 / m.m00, m.m01 / m.m00);
+  /*** Watershed Algorithm ***/
+  // Perform the distance transform algorithm
+  cv::Mat dist_w;
+  cv::distanceTransform(threshFrame, dist_w, cv::DIST_L2, 3);
+
+  cv:: Mat imgResult;
+  cv::cvtColor(threshFrame, imgResult, CV_GRAY2BGR, 3);
+
+  // Normalize the distance image for range = {0.0, 1.0}
+  // so we can visualize and threshold it
+  cv::normalize(dist_w, dist_w, 0, 1.0, cv::NORM_MINMAX);
+
+  // This will be the markers for the foreground objects
+  cv::threshold(dist_w, dist_w, 0.4, 1.0, cv::THRESH_BINARY);
+
+  // Create the CV_8U version of the distance image
+  // It is needed for findContours()
+  cv::Mat dist_8u;
+  dist_w.convertTo(dist_8u, CV_8U);
+  // Find total markers
+  std::vector<std::vector<cv::Point> > contours;
+  cv::findContours(dist_8u, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+  if (contours.empty()) {
+    ROS_INFO_THROTTLE(1, "No contours, prev_depth = %f", prev_depth);
+    return;
+  }
+
+  // Create the marker image for the watershed algorithm
+  cv::Mat markers = cv::Mat::zeros(dist_w.size(), CV_32S);
+
+  int largest_idx = -1;
+  int largest_contour_size = 0;
+  for (size_t i = 0; i < contours.size(); i++)
+  {
+    if (contours[i].size() > largest_contour_size && contours[i].size() > 5) {
+      largest_idx = i;
+      largest_contour_size = contours[i].size();
+    }
+  }
+  // ROS_INFO("Contour %d has %d size", largest_idx, largest_contour_size);
+
+  std::vector<std::vector<cv::Point>> contours_largest;
+  // Find total markers
+  if (largest_contour_size > 0) {
+    contours_largest.push_back(contours[largest_idx]);
+  }
+  else {
+    ROS_INFO_THROTTLE(1, "No contours were of sufficient size");
+    return;
+  }
+
+  // Draw the foreground markers
+  // cv::drawContours(markers, contours_largest, static_cast<int>(0), cv::Scalar(static_cast<int>(0)+1), -1);
+  
+  // Draw the background marker
+  // cv::circle(markers, cv::Point(5,5), 3, cv::Scalar(255), -1);
+  // cv::Mat markers8u;
+  // markers.convertTo(markers8u, CV_8U, 10);
+
+  // Perform the watershed algorithm
+  cv::watershed(imgResult, markers);
+  cv::Mat mark;
+  markers.convertTo(mark, CV_8U);
+  cv::bitwise_not(mark, mark);
 
   // Draw center point
-  cv::Scalar color = cv::Scalar(0, 0, 255);
-  cv::drawMarker(frame, com, color, cv::MARKER_CROSS, 20, 5);
-
-  if (m.m00 == 0) {
-    ROS_WARN("Skipping, did not detect ball.");
-    return;
-  }
-
-  /*** 2D Image Space to 3D Position ***/
-  double x = m.m10 / m.m00;
-  double y = m.m01 / m.m00;
+  cv::Scalar color = cv::Scalar(0, 0, 255);  
   
   ///////////////// Add radius if needed
-  ROS_INFO("x: %f, y: %f", x, y);
-  // Get depth from 2D Depth Image
-  float depth = depth_frame.at<float>(int(y), int(x));
-  ROS_INFO("%f", depth);
+  float depth_sum = 0;
+  int depth_count = 0;
+  float x_sum = 0;
+  float y_sum = 0;
 
-  if (depth <= 0) {
-    ROS_WARN("Skipping, Depth less than or equal to 0.");
+  float depth;
+  // Get depth from 2D Depth Image
+  for (int i = 0; i < contours[largest_idx].size(); i++) {
+    auto point = contours[largest_idx][i];
+    x_sum += point.x;
+    y_sum += point.y;
+  }
+
+  x_sum /= contours[largest_idx].size();
+  y_sum /= contours[largest_idx].size();
+
+  float min_depth = std::numeric_limits<float>::max();
+  int half_dim = 25;
+  // Get depth from 2D Depth Image
+  for (int i = -half_dim; i <= half_dim; i++) {
+    for (int j = -half_dim; j <= half_dim; j++) {
+      depth = depth_frame.at<float>(int(y_sum)+i, int(x_sum)+j);
+      if (depth < min_depth && depth > 0.2) {
+        min_depth = depth;
+      }
+      // if (depth > 0.05 && depth < 2) {
+      //   std::cout << depth << std::endl;
+      //   depth_sum += depth;
+      //   depth_count++;
+      // }
+    }
+  }
+
+  if (min_depth < 0.2 || min_depth > 3) {
+    depth = prev_depth;
+  }
+  else {
+    depth = min_depth;
+    prev_depth = depth;
+  }
+
+  if (depth == 0) {
+    ROS_INFO("Invalid depth");
     return;
   }
 
+  //depth_sum /= depth_count;
+  // ROS_INFO("Float depth: %f", depth);
+
+  // cv::circle(mark, cv::Point(x_sum,y_sum), 15, cv::Scalar(0), -1);
+
   // Create homogenous pixel position
-  cv::Mat pixel_pos = (cv::Mat_<double>(3,1) << x, y, 1.0);
+  cv::Mat pixel_pos = (cv::Mat_<double>(3,1) << x_sum, y_sum, 1.0);
 
   // Get ball position relative to camera
   cv::Mat ball_to_cam = depth*K.inv()*pixel_pos;
@@ -191,22 +362,18 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
 
   geometry_msgs::PointStamped ball;
   ball.point.x = ball_to_cam.at<double>(0);
-  ball.point.y = ball_to_cam.at<double>(1);
-  ball.point.z = ball_to_cam.at<double>(2);
-  ball.header.frame_id = "cam";
-
-  /*** Converting to ROS Image Message and Publishing ***/
-  // Publish Original Image with Marger Message
-  msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", frame).toImageMsg();
-  marked_pub.publish(msg);
 
   // Publish Image Message
-  msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", blurFrame).toImageMsg();
-  trans_pub.publish(msg);
+  // msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", blurFrame).toImageMsg();
+  // trans_pub.publish(msg);
 
   // Publish Thresholded Image Message
-  msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", threshFrame).toImageMsg();
-  ball_pub.publish(msg);
+  // msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", threshFrame).toImageMsg();
+  // ball_pub.publish(msg);
+
+  // Publish Thresholded Image Message
+  // msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", mark).toImageMsg();
+  // water_pub.publish(msg);
 
   /*** Publish Ball Center Position Relative to World Frame ***/
   // Create Image pointer to be published
@@ -226,6 +393,8 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
     catch_point.point.z = 0.2;
     catch_point.header.frame_id = "panda_link0";
     catch_point_pub.publish(catch_point);
+
+    ROS_WARN("POINT CATCHED AT = %f, %f, %f", catch_point.point.x, catch_point.point.y, catch_point.point.z);
   }
 
   point_msg.header.frame_id = "panda_link0";
@@ -247,26 +416,29 @@ int main(int argc, char **argv)
   message_filters::Subscriber<sensor_msgs::Image> image_sub(nh_, "/rgb/image_raw", 1);
   message_filters::Subscriber<sensor_msgs::Image> depth_sub(nh_, "/depth_to_rgb/image_raw", 1);
   typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> MySyncPolicy;
-  message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(10), image_sub, depth_sub);
+  message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(2), image_sub, depth_sub);
   sync.registerCallback(boost::bind(&imgCallback, _1, _2));
 
   // Advertisers
-  marked_pub = it.advertise("ball_marked", 1);
-  trans_pub = it.advertise("ball_trans", 1);
-  ball_pub = it.advertise("ball_img", 1);
+  // marked_pub = it.advertise("ball_marked", 1);
+  // trans_pub = it.advertise("ball_trans", 1);
+  // ball_pub = it.advertise("ball_img", 1);
+  // water_pub = it.advertise("water_img", 1);
   pose_pub = nh_.advertise<geometry_msgs::PointStamped>("ball_pose", 5);
   catch_point_pub = nh_.advertise<geometry_msgs::PointStamped>("catch_point", 5);
+  // vis = nh_.advertise<visualization_msgs::Marker>("visualization_marker", 10);
 
   // Intrinsics
-  K = (cv::Mat_<double>(3,3) << 972.31787109375, 0.0, 1022.3043212890625, 0.0, 971.8189086914062, 777.7421875, 0.0, 0.0, 1.0);
+  K = (cv::Mat_<double>(3,3) << 909.8428955078125, 0.0, 961.3718872070312, 0.0, 909.5616455078125, 549.1278686523438, 0.0, 0.0, 1.0);
 
   // Extrisnics for Camera to World Frame
-  extrinsics = (cv::Mat_<double>(4,4) <<  -0.383097, -0.244886, 0.890645,-0.069287, 
-                                          -0.923347, 0.074961, -0.376553, 0.371678, 
-                                          0.025449, -0.966650, -0.254833,  0.654526, 
+  extrinsics = (cv::Mat_<double>(4,4) <<  -0.425703, 0.050087, 0.903465, -0.064335, 
+                                          -0.904793, -0.035017, -0.424387, 0.394543, 
+                                          0.010381, -0.998131 ,0.060225,  0.701992, 
                                           0.0, 0.0, 0.0, 1.0);
 
+  prev_time = ros::Time::now();
   ros::spin();
 
   return 0;
-}
+}  

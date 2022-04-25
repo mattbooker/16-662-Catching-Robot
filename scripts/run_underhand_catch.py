@@ -58,10 +58,10 @@ def getTimeSince(start_time):
     return rospy.Time.now().to_time() - start_time
 
 if __name__ == "__main__":
-    T = 1
+    T = 0.4
     dt = 0.02
     ts = np.arange(0, T, dt)
-    buffer_time = 15
+    buffer_time = 20
 
     traj_idx = 0
     msg_id = 0
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     # Setup pub and sub
     rospy.loginfo('Initializing Publishers')
     arm_pub = rospy.Publisher(FC.DEFAULT_SENSOR_PUBLISHER_TOPIC, SensorDataGroup, queue_size=1000)
-    ball_sub = rospy.Subscriber("ball_pose", PointStamped, ball_callback)
+    ball_sub = rospy.Subscriber("catch_point", PointStamped, ball_callback)
     rate = rospy.Rate(1 / dt)
 
     # Go to starting position (needs to be done in joint space)
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     y = -0.05 - 0.6+ (0.6 is way more than we need)
     '''
     # T_delta = RigidTransform(
-    #     translation=np.array([-0.1, 0.4, 0]),
+    #     translation=np.array([0, 0, 0]),
     #     rotation=RigidTransform.x_axis_rotation(np.deg2rad(0)), 
     #                         from_frame="world", to_frame=p0.to_frame)
 
