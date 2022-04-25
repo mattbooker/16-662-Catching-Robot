@@ -36,7 +36,7 @@ ros::Publisher vis;
 float prev_depth;
 
 const float NUMBER_OF_SAMPLES = 10;
-const float START_DEPTH = 2.3;
+const float START_DEPTH = 2.5;
 const float HEIGHT_OFFSET = 0.3;
 
 std::vector<double> samples_x(NUMBER_OF_SAMPLES);
@@ -95,6 +95,12 @@ std::pair<float, float> ball_estimation(geometry_msgs::PointStamped point_msg)
 
 
   if (dist < 0.2 || dist > START_DEPTH) {
+    ROS_WARN("Buffers reset");
+    samples_x.clear();
+    samples_y.clear();
+    samples_z.clear();
+    samples_t.clear();
+    sample_count = 0;
     return invalid_estimate;
   }
 
@@ -103,72 +109,102 @@ std::pair<float, float> ball_estimation(geometry_msgs::PointStamped point_msg)
     samples_y.push_back(point_msg.point.y);
     samples_z.push_back(point_msg.point.z);
 
-    // visualization_msgs::Marker points;
-    // points.header.frame_id = "panda_link0";
-    // points.header.stamp = ros::Time::now();
-    // points.ns = "points";
-    // points.action = visualization_msgs::Marker::ADD;
-    // points.pose.orientation.w = 1.0;
-    // points.id = sample_count;
-    // points.type = visualization_msgs::Marker::POINTS;
-    // points.scale.x = 0.05;
-    // points.scale.y = 0.05;
-    // points.color.g = 1.0f;
-    // points.color.a = 1.0;
+    visualization_msgs::Marker points;
+    points.header.frame_id = "panda_link0";
+    points.header.stamp = ros::Time::now();
+    points.ns = "points";
+    points.action = visualization_msgs::Marker::ADD;
+    points.pose.orientation.w = 1.0;
+    points.id = sample_count;
+    points.type = visualization_msgs::Marker::POINTS;
+    points.scale.x = 0.05;
+    points.scale.y = 0.05;
+    points.color.g = 1.0f;
+    points.color.a = 1.0;
 
-    // geometry_msgs::Point p;
-    // p.x = point_msg.point.x;
-    // p.y = point_msg.point.y;
-    // p.z = point_msg.point.z;
-    // points.points.push_back(p);
-    // vis.publish(points);
+    geometry_msgs::Point p;
+    p.x = point_msg.point.x;
+    p.y = point_msg.point.y;
+    p.z = point_msg.point.z;
+    points.points.push_back(p);
+    vis.publish(points);
 
     double t = float(ros::Time::now().nsec) / 1e9;
     samples_t.push_back(t);
 
     sample_count++;
-    return invalid_estimate;
-  }
-  else {
-    std::vector<double> x_coeff;
-    std::vector<double> y_coeff;
-    std::vector<double> z_coeff;
-    polyfit(samples_t, samples_x, x_coeff, 1);
-    polyfit(samples_t, samples_y, y_coeff, 1);
-    polyfit(samples_t, samples_z, z_coeff, 2);
 
-    float a = z_coeff[2];
-    float b = z_coeff[1];
-    float c = z_coeff[0] - HEIGHT_OFFSET;
-
-    float discriminant = b*b - 4*a*c;
-    float root, root1, root2;
-
-    if (discriminant > 0)
-    {
-      root1 = (-b + sqrt(discriminant)) / (2*a);
-      root2 = (-b - sqrt(discriminant)) / (2*a);
-      root = std::min(root1, root2);
-    }
-    else if (discriminant==0)
-    {
-      root = -b/(2*a);
-    }
-    else
-    {
-      ROS_ERROR("Roots are imaginary");
+    if (sample_count < NUMBER_OF_SAMPLES) {
       return invalid_estimate;
     }
-
-    ROS_WARN("Root = %f, %f, %f, %f", root, root1, root2, discriminant);
-    ROS_WARN("x_coeffs = %f, %f", x_coeff[0], x_coeff[1]);
-    float x_final = x_coeff[0] + root * x_coeff[1];
-    float y_final = y_coeff[0] + std::max(root1, root2) * y_coeff[1];
-
-    return std::make_pair(x_final, y_final);    
   }
 
+  ros::Time s = ros::Time::now();
+
+  std::vector<double> x_coeff;
+  std::vector<double> y_coeff;
+  std::vector<double> z_coeff;
+  polyfit(samples_t, samples_x, x_coeff, 1);
+  polyfit(samples_t, samples_y, y_coeff, 1);
+  polyfit(samples_t, samples_z, z_coeff, 2);
+
+  float a = z_coeff[2];
+  float b = z_coeff[1];
+  float c = z_coeff[0] - HEIGHT_OFFSET;
+
+  float discriminant = b*b - 4*a*c;
+  float root, root1, root2;
+
+  if (discriminant > 0)
+  {
+    root1 = (-b + sqrt(discriminant)) / (2*a);
+    root2 = (-b - sqrt(discriminant)) / (2*a);
+    root = std::min(root1, root2);
+  }
+  else if (discriminant==0)
+  {
+    root = -b/(2*a);
+  }
+  else
+  {
+    ROS_ERROR("Roots are imaginary");
+    return invalid_estimate;
+  }
+
+  ROS_WARN("Root = %f, %f, %f, %f", root, root1, root2, discriminant);
+  float x_cand_min = x_coeff[0] + std::min(root1, root2) * x_coeff[1];
+  float x_cand_max = x_coeff[0] + std::max(root1, root2) * x_coeff[1];
+  float y_cand_min = y_coeff[0] + std::min(root1, root2) * y_coeff[1];
+  float y_cand_max = y_coeff[0] + std::max(root1, root2) * y_coeff[1];
+
+  ROS_WARN("Candidates x = %f, %f | y = %f, %f", x_cand_min, x_cand_max, y_cand_min, y_cand_max);
+
+  float x_final, y_final;
+
+  float x_centre = 0.45;
+  float y_centre = -0.1;
+
+  if (abs(x_cand_max - x_centre) < abs(x_cand_min - x_centre)) {
+    x_final = x_cand_max;
+  }
+  else {
+    x_final = x_cand_min;
+  }
+
+  if (abs(y_cand_max - y_centre) < abs(y_cand_min - y_centre)) {
+    y_final = y_cand_max;
+  }
+  else {
+    y_final = y_cand_min;
+  }
+
+  ros::Duration end = ros::Time::now() - s;
+
+  ROS_WARN("Selected = %f, %f", x_final, y_final);
+  ROS_ERROR("%f", end.nsec / 1e9);
   prev_time = ros::Time::now();
+
+  return std::make_pair(x_final, y_final);
 }
 
 // RGB Image
@@ -390,7 +426,7 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
     geometry_msgs::PointStamped catch_point;
     catch_point.point.x = estimated_catch_point.first;
     catch_point.point.y = estimated_catch_point.second;
-    catch_point.point.z = 0.2;
+    catch_point.point.z = 0.3;
     catch_point.header.frame_id = "panda_link0";
     catch_point_pub.publish(catch_point);
 
@@ -426,7 +462,7 @@ int main(int argc, char **argv)
   // water_pub = it.advertise("water_img", 1);
   pose_pub = nh_.advertise<geometry_msgs::PointStamped>("ball_pose", 5);
   catch_point_pub = nh_.advertise<geometry_msgs::PointStamped>("catch_point", 5);
-  // vis = nh_.advertise<visualization_msgs::Marker>("visualization_marker", 10);
+  vis = nh_.advertise<visualization_msgs::Marker>("visualization_marker", 10);
 
   // Intrinsics
   K = (cv::Mat_<double>(3,3) << 909.8428955078125, 0.0, 961.3718872070312, 0.0, 909.5616455078125, 549.1278686523438, 0.0, 0.0, 1.0);

@@ -3,7 +3,7 @@ import pickle
 table = pickle.load(open("lookup_table_5cm.p", "rb"))
 
 a = list(table.keys())[0]
-print(max(table.keys()))
+print(table[a].keys())
 
 # Round raw keys
 # table = pickle.load(open("lookup_table_5cm_raw.p", "rb"))

@@ -58,10 +58,10 @@ def getTimeSince(start_time):
     return rospy.Time.now().to_time() - start_time
 
 if __name__ == "__main__":
-    T = 0.4
+    T = 0.5
     dt = 0.02
     ts = np.arange(0, T, dt)
-    buffer_time = 20
+    buffer_time = 10
 
     traj_idx = 0
     msg_id = 0
