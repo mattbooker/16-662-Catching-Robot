@@ -19,9 +19,11 @@ ball_position = PointStamped()
 prev_position = PointStamped()
 
 lookup_table = pickle.load(open("lookup_table_5cm.p", "rb"))
-max_x = max(lookup_table.keys())
+# max_x = max(lookup_table.keys())
+max_x = 0.55
 min_x = min(lookup_table.keys())
-max_y = max(lookup_table[max_x].keys())
+# max_y = max(lookup_table[max_x].keys())
+max_y = 0.1
 min_y = min(lookup_table[min_x].keys())
 
 def distance(a, b):

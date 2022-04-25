@@ -35,9 +35,9 @@ ros::Publisher vis;
 
 float prev_depth;
 
-const float NUMBER_OF_SAMPLES = 10;
-const float START_DEPTH = 2.5;
-const float HEIGHT_OFFSET = 0.3;
+const float NUMBER_OF_SAMPLES = 5;
+const float START_DEPTH = 2.6;
+const float HEIGHT_OFFSET = 0.5;
 
 std::vector<double> samples_x(NUMBER_OF_SAMPLES);
 std::vector<double> samples_y(NUMBER_OF_SAMPLES);
@@ -348,6 +348,7 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
 
   float min_depth = std::numeric_limits<float>::max();
   int half_dim = 25;
+
   // Get depth from 2D Depth Image
   for (int i = -half_dim; i <= half_dim; i++) {
     for (int j = -half_dim; j <= half_dim; j++) {
