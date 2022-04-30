@@ -3,16 +3,16 @@ from geometry_msgs.msg import PointStamped, Point
 import numpy as np
 
 def fake_ball():
-    pub = rospy.Publisher('ball_pose', PointStamped, queue_size=10)
+    pub = rospy.Publisher('catch_point', PointStamped, queue_size=10)
     rospy.init_node('fake_ball')
     rate = rospy.Rate(10) # 10hz
 
     init_time = rospy.Time.now().to_time()
 
-    x = np.random.randint(low=30, high=65, size=4) / 100
-    y = np.random.randint(low=-30, high=15, size=4) / 100 
+    xs = [0.35, 0.6, 0.6, 0.35]
+    ys = [-0.25, -0.25, 0.25, 0.25]
 
-    map_of_points = [Point(x[i], y[i], 0.3) for i in range(4)]
+    map_of_points = [Point(xs[i], ys[i], 0.3) for i in range(4)]
 
     print(map_of_points)
 

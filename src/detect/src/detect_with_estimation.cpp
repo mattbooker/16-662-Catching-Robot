@@ -35,14 +35,14 @@ ros::Publisher vis;
 
 float prev_depth;
 
-const float NUMBER_OF_SAMPLES = 5;
-const float START_DEPTH = 2.6;
-const float HEIGHT_OFFSET = 0.5;
+const float START_HEIGHT = 0.5;
+const float HEIGHT_OFFSET = 0.3;
+const float X_CATCH_POINT = 0.5;
 
-std::vector<double> samples_x(NUMBER_OF_SAMPLES);
-std::vector<double> samples_y(NUMBER_OF_SAMPLES);
-std::vector<double> samples_z(NUMBER_OF_SAMPLES);
-std::vector<double> samples_t(NUMBER_OF_SAMPLES);
+std::vector<double> samples_x(20);
+std::vector<double> samples_y(20);
+std::vector<double> samples_z(20);
+std::vector<double> samples_t(20);
 ros::Time prev_time;
 int sample_count = 0;
 
@@ -94,33 +94,22 @@ std::pair<float, float> ball_estimation(geometry_msgs::PointStamped point_msg)
   ROS_ERROR("dist = %f",dist);
 
 
-  if (dist < 0.2 || dist > START_DEPTH) {
+  if (dist < 0.2 || point_msg.point.z < START_HEIGHT) {
     ROS_WARN("Buffers reset");
     samples_x.clear();
     samples_y.clear();
     samples_z.clear();
     samples_t.clear();
     sample_count = 0;
-    return invalid_estimate;
-  }
-
-  if (sample_count < NUMBER_OF_SAMPLES) {
-    samples_x.push_back(point_msg.point.x);
-    samples_y.push_back(point_msg.point.y);
-    samples_z.push_back(point_msg.point.z);
 
     visualization_msgs::Marker points;
     points.header.frame_id = "panda_link0";
     points.header.stamp = ros::Time::now();
     points.ns = "points";
-    points.action = visualization_msgs::Marker::ADD;
+    points.action = visualization_msgs::Marker::DELETEALL;
     points.pose.orientation.w = 1.0;
     points.id = sample_count;
     points.type = visualization_msgs::Marker::POINTS;
-    points.scale.x = 0.05;
-    points.scale.y = 0.05;
-    points.color.g = 1.0f;
-    points.color.a = 1.0;
 
     geometry_msgs::Point p;
     p.x = point_msg.point.x;
@@ -129,14 +118,40 @@ std::pair<float, float> ball_estimation(geometry_msgs::PointStamped point_msg)
     points.points.push_back(p);
     vis.publish(points);
 
-    double t = float(ros::Time::now().nsec) / 1e9;
-    samples_t.push_back(t);
+    return invalid_estimate;
+  }
 
-    sample_count++;
+  samples_x.push_back(point_msg.point.x);
+  samples_y.push_back(point_msg.point.y);
+  samples_z.push_back(point_msg.point.z);
 
-    if (sample_count < NUMBER_OF_SAMPLES) {
-      return invalid_estimate;
-    }
+  visualization_msgs::Marker points;
+  points.header.frame_id = "panda_link0";
+  points.header.stamp = ros::Time::now();
+  points.ns = "points";
+  points.action = visualization_msgs::Marker::ADD;
+  points.pose.orientation.w = 1.0;
+  points.id = sample_count;
+  points.type = visualization_msgs::Marker::POINTS;
+  points.scale.x = 0.05;
+  points.scale.y = 0.05;
+  points.color.g = 1.0f;
+  points.color.a = 1.0;
+
+  geometry_msgs::Point p;
+  p.x = point_msg.point.x;
+  p.y = point_msg.point.y;
+  p.z = point_msg.point.z;
+  points.points.push_back(p);
+  vis.publish(points);
+
+  double t = float(ros::Time::now().nsec) / 1e9;
+  samples_t.push_back(t);
+
+  sample_count++;
+  
+  if (sample_count < 4) {
+    return invalid_estimate;
   }
 
   ros::Time s = ros::Time::now();
@@ -148,63 +163,71 @@ std::pair<float, float> ball_estimation(geometry_msgs::PointStamped point_msg)
   polyfit(samples_t, samples_y, y_coeff, 1);
   polyfit(samples_t, samples_z, z_coeff, 2);
 
-  float a = z_coeff[2];
-  float b = z_coeff[1];
-  float c = z_coeff[0] - HEIGHT_OFFSET;
+  float catch_time = (X_CATCH_POINT - x_coeff[0]) / x_coeff[1];
+  float catch_y = y_coeff[1] * catch_time + y_coeff[0];
+  float catch_z = -9.81/2 * pow(catch_time, 2) + z_coeff[1] * catch_time + z_coeff[0];
+  
+  return std::make_pair(catch_y, catch_z);
 
-  float discriminant = b*b - 4*a*c;
-  float root, root1, root2;
+  // float a = -9.81 / 2;
+  // float b = z_coeff[1];
+  // float c = z_coeff[0] - HEIGHT_OFFSET;
 
-  if (discriminant > 0)
-  {
-    root1 = (-b + sqrt(discriminant)) / (2*a);
-    root2 = (-b - sqrt(discriminant)) / (2*a);
-    root = std::min(root1, root2);
-  }
-  else if (discriminant==0)
-  {
-    root = -b/(2*a);
-  }
-  else
-  {
-    ROS_ERROR("Roots are imaginary");
-    return invalid_estimate;
-  }
+  // float discriminant = b*b - 4*a*c;
+  // float root, root1, root2;
 
-  ROS_WARN("Root = %f, %f, %f, %f", root, root1, root2, discriminant);
-  float x_cand_min = x_coeff[0] + std::min(root1, root2) * x_coeff[1];
-  float x_cand_max = x_coeff[0] + std::max(root1, root2) * x_coeff[1];
-  float y_cand_min = y_coeff[0] + std::min(root1, root2) * y_coeff[1];
-  float y_cand_max = y_coeff[0] + std::max(root1, root2) * y_coeff[1];
+  // if (discriminant > 0)
+  // {
+  //   root1 = (-b + sqrt(discriminant)) / (2*a);
+  //   root2 = (-b - sqrt(discriminant)) / (2*a);
+  //   root = std::min(root1, root2);
+  // }
+  // else if (discriminant==0)
+  // {
+  //   root = -b/(2*a);
+  // }
+  // else
+  // {
+  //   ROS_ERROR("Roots are imaginary");
+  //   return invalid_estimate;
+  // }
 
-  ROS_WARN("Candidates x = %f, %f | y = %f, %f", x_cand_min, x_cand_max, y_cand_min, y_cand_max);
+  // ROS_WARN("Root = %f, %f, %f, %f", root, root1, root2, discriminant);
+  // float x_cand_min = x_coeff[0] + std::min(root1, root2) * x_coeff[1];
+  // float x_cand_max = x_coeff[0] + std::max(root1, root2) * x_coeff[1];
+  // float y_cand_min = y_coeff[0] + std::min(root1, root2) * y_coeff[1];
+  // float y_cand_max = y_coeff[0] + std::max(root1, root2) * y_coeff[1];
 
-  float x_final, y_final;
+  // ROS_WARN("Candidates x = %f, %f | y = %f, %f", x_cand_min, x_cand_max, y_cand_min, y_cand_max);
 
-  float x_centre = 0.45;
-  float y_centre = -0.1;
+  // ROS_ERROR("Coeffs = %f, %f,%f", z_coeff[0], z_coeff[1], z_coeff[2]);
 
-  if (abs(x_cand_max - x_centre) < abs(x_cand_min - x_centre)) {
-    x_final = x_cand_max;
-  }
-  else {
-    x_final = x_cand_min;
-  }
+  // float x_final, y_final;
 
-  if (abs(y_cand_max - y_centre) < abs(y_cand_min - y_centre)) {
-    y_final = y_cand_max;
-  }
-  else {
-    y_final = y_cand_min;
-  }
+  // float x_centre = 0.45;
+  // float y_centre = -0.1;
 
-  ros::Duration end = ros::Time::now() - s;
+  // if (abs(x_cand_max - x_centre) < abs(x_cand_min - x_centre)) {
+  //   x_final = x_cand_max;
+  // }
+  // else {
+  //   x_final = x_cand_min;
+  // }
 
-  ROS_WARN("Selected = %f, %f", x_final, y_final);
-  ROS_ERROR("%f", end.nsec / 1e9);
-  prev_time = ros::Time::now();
+  // if (abs(y_cand_max - y_centre) < abs(y_cand_min - y_centre)) {
+  //   y_final = y_cand_max;
+  // }
+  // else {
+  //   y_final = y_cand_min;
+  // }
 
-  return std::make_pair(x_final, y_final);
+  // ros::Duration end = ros::Time::now() - s;
+
+  // ROS_WARN("Selected = %f, %f", x_final, y_final);
+  // ROS_ERROR("%f", end.nsec / 1e9);
+  // prev_time = ros::Time::now();
+
+  // return std::make_pair(x_final, y_final);
 }
 
 // RGB Image
@@ -243,7 +266,8 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
   cv::blur(hsvFrame, blurFrame, cv::Size(1, 1));
 
   // Threshold
-  cv::Scalar lowerBound = cv::Scalar(28, 85, 107);
+  // cv::Scalar lowerBound = cv::Scalar(28, 85, 107);
+  cv::Scalar lowerBound = cv::Scalar(22, 85, 107);
   cv::Scalar upperBound = cv::Scalar(38, 255, 255);
 
   cv::Mat threshFrame;
@@ -252,7 +276,7 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
   // Erosion & Dilation for Noise
   int kernel_size = 1;
   cv::Mat element_erode = cv::getStructuringElement(cv::MORPH_ELLIPSE,
-                          cv::Size(2*kernel_size + 1, 2*kernel_size + 1),
+                          cv::Size(2*kernel_size + 3, 2*kernel_size + 3),
                           cv::Point(kernel_size, kernel_size));
   cv::Mat element_dilate = cv::getStructuringElement(cv::MORPH_ELLIPSE,
                           cv::Size(2*kernel_size + 3, 2*kernel_size + 3),
@@ -295,7 +319,7 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
   int largest_contour_size = 0;
   for (size_t i = 0; i < contours.size(); i++)
   {
-    if (contours[i].size() > largest_contour_size && contours[i].size() > 5) {
+    if (contours[i].size() > largest_contour_size && contours[i].size() > 10) {
       largest_idx = i;
       largest_contour_size = contours[i].size();
     }
@@ -347,13 +371,13 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
   y_sum /= contours[largest_idx].size();
 
   float min_depth = std::numeric_limits<float>::max();
-  int half_dim = 25;
+  int half_dim = 30;
 
   // Get depth from 2D Depth Image
   for (int i = -half_dim; i <= half_dim; i++) {
     for (int j = -half_dim; j <= half_dim; j++) {
       depth = depth_frame.at<float>(int(y_sum)+i, int(x_sum)+j);
-      if (depth < min_depth && depth > 0.2) {
+      if (depth < min_depth && depth > 0.7) {
         min_depth = depth;
       }
       // if (depth > 0.05 && depth < 2) {
@@ -425,10 +449,11 @@ void imgCallback(const sensor_msgs::ImageConstPtr& img_msg, const sensor_msgs::I
 
   if (estimated_catch_point != invalid_estimate) {
     geometry_msgs::PointStamped catch_point;
-    catch_point.point.x = estimated_catch_point.first;
-    catch_point.point.y = estimated_catch_point.second;
-    catch_point.point.z = 0.3;
+    catch_point.point.x = X_CATCH_POINT;
+    catch_point.point.y = estimated_catch_point.first; 
+    catch_point.point.z = estimated_catch_point.second;
     catch_point.header.frame_id = "panda_link0";
+    catch_point.header.stamp = ros::Time::now();
     catch_point_pub.publish(catch_point);
 
     ROS_WARN("POINT CATCHED AT = %f, %f, %f", catch_point.point.x, catch_point.point.y, catch_point.point.z);
@@ -462,7 +487,7 @@ int main(int argc, char **argv)
   // ball_pub = it.advertise("ball_img", 1);
   // water_pub = it.advertise("water_img", 1);
   pose_pub = nh_.advertise<geometry_msgs::PointStamped>("ball_pose", 5);
-  catch_point_pub = nh_.advertise<geometry_msgs::PointStamped>("catch_point", 5);
+  catch_point_pub = nh_.advertise<geometry_msgs::PointStamped>("catch_point", 1);
   vis = nh_.advertise<visualization_msgs::Marker>("visualization_marker", 10);
 
   // Intrinsics

@@ -13,30 +13,29 @@ import rospy
 
 
 if __name__ == "__main__":
-    fa = FrankaArm()
+    fa = FrankaArm(with_gripper=False)
 
-    fa.reset_joints()
+    # fa.reset_joints()
 
     rospy.loginfo('Generating Trajectory')
+    fa.goto_joints([1.06118167, -1.47672282, -1.71470848, -2.25366571,  0.02716874, 1.74172283, -0.95480864], duration=5, ignore_virtual_walls=True, use_impedance=True)
     p0 = fa.get_pose()
     p1 = RigidTransform(
-        translation=np.array([0.40832528, -0.0464719, 0.1433692]), 
-        rotation=np.array([[ 0.70225965, 0.01181182, 0.71181624],
-                            [0.00149043, -0.99987492,  0.01512171],
-                            [0.71190583, -0.00955845, -0.70220294]]), 
-                            from_frame="franka_tool", to_frame="world")
-    fa.goto_pose(p1, duration=4)
+        translation=np.array([0.45, 0.1, 0.3]),
+        rotation=p0.rotation, 
+        from_frame=p0.from_frame, to_frame="world")
+    # fa.goto_pose(p1, duration=4)
 
-    # T = 2
-    # dt = 0.02
-    # ts = np.arange(0, T, dt)
-    # current_gripper_width = 0.08
-    # has_closed = False
 
-    # weights = [min_jerk_weight(t, T) for t in ts]
-    # pose_traj = [p1.interpolate_with(p0, w) for w in weights]
 
-    # z_stiffness_traj = [min_jerk(100, 800, t, T) for t in ts]
+    T = 2
+    dt = 0.02
+    ts = np.arange(0, T, dt)
+
+    weights = [min_jerk_weight(t, T) for t in ts]
+    pose_traj = [p1.interpolate_with(p0, w) for w in weights]
+
+    z_stiffness_traj = [min_jerk(100, 800, t, T) for t in ts]
 
     # rospy.loginfo('Initializing Sensor Publisher')
     # pub = rospy.Publisher(FC.DEFAULT_SENSOR_PUBLISHER_TOPIC, SensorDataGroup, queue_size=1000)
